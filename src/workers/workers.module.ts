@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LoggingModule } from '../common/logging/logging.module';
 import { IocsModule } from '../modules/iocs/iocs.module';
 import { JobsModule } from '../modules/jobs/jobs.module';
 import { ResultsModule } from '../modules/results/results.module';
@@ -9,7 +10,7 @@ import { StaticAnalyzerWorker } from './static-analyzer.worker';
 import { UrlAnalyzerWorker } from './url-analyzer.worker';
 
 @Module({
-  imports: [JobsModule, ResultsModule, IocsModule],
+  imports: [LoggingModule, JobsModule, ResultsModule, IocsModule],
   providers: [
     AnalysisQueueProcessor,
     StaticAnalyzerWorker,

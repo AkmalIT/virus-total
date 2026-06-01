@@ -67,4 +67,38 @@ export class AnalysisQueueService {
       },
     );
   }
+
+  async listDeadLetterJobs(limit = 50) {
+    const safeLimit =
+      Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
+    const jobs = await this.deadLetterQueue.getJobs(
+      ['waiting', 'delayed', 'failed'],
+      0,
+      safeLimit - 1,
+      false,
+    );
+
+    return jobs.map((job) => ({
+      id: job.id,
+      name: job.name,
+      data: job.data,
+      attemptsMade: job.attemptsMade,
+      failedReason: job.failedReason,
+      timestamp: job.timestamp,
+      processedOn: job.processedOn,
+      finishedOn: job.finishedOn,
+    }));
+  }
+
+  async getDeadLetterPayload(id: string) {
+    const job = await this.deadLetterQueue.getJob(id);
+
+    return job?.data ?? null;
+  }
+
+  async removeDeadLetterJob(id: string) {
+    const job = await this.deadLetterQueue.getJob(id);
+
+    await job?.remove();
+  }
 }

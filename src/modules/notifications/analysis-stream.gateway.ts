@@ -33,13 +33,12 @@ export class AnalysisStreamGateway {
   }
 
   emitJobUpdate(submissionId: string, payload: Record<string, unknown>) {
-    this.server?.to(this.roomForSubmission(submissionId)).emit(
-      'analysis.update',
-      {
+    this.server
+      ?.to(this.roomForSubmission(submissionId))
+      .emit('analysis.update', {
         event: 'analysis.update',
         submissionId,
         ...payload,
-      },
-    );
+      });
   }
 }

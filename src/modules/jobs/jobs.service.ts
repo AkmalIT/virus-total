@@ -5,12 +5,25 @@ import {
   AnalysisJobType,
   SubmissionStatus,
 } from '@prisma/client';
+import { AppLogger } from '../../common/logging/app-logger.service';
+import { runWithCorrelation } from '../../common/logging/correlation.context';
 import { serializePrisma } from '../../common/serializers/prisma.serializer';
 import { PrismaService } from '../../infra/db/prisma.service';
 import { AnalysisQueueService } from '../../infra/queue/analysis-queue.service';
+import { AnalysisDeadLetterPayload } from '../../infra/queue/queue.constants';
 import { NotificationsService } from '../notifications/notifications.service';
+import { getZombiePendingThresholdMs, isRunningJobStale } from './job-timeouts';
 
-const RECOVERY_RUNNING_TIMEOUT_MS = 15 * 60 * 1000;
+export type DeadLetterJobView = {
+  id: string;
+  jobId: string;
+  submissionId: string;
+  jobType: string;
+  attempts: number;
+  failedReason: string;
+  failedAt: string;
+  payload: AnalysisDeadLetterPayload;
+};
 
 @Injectable()
 export class JobsService {
@@ -18,6 +31,7 @@ export class JobsService {
     private readonly prisma: PrismaService,
     private readonly analysisQueue: AnalysisQueueService,
     private readonly notifications: NotificationsService,
+    private readonly logger: AppLogger,
   ) {}
 
   async createForSubmission(
@@ -25,30 +39,23 @@ export class JobsService {
     jobType: AnalysisJobType,
     priority = 1,
   ) {
-    const existingJob = await this.prisma.analysisJob.findFirst({
+    const job = await this.prisma.analysisJob.upsert({
       where: {
+        submission_id_job_type: {
+          submission_id: submissionId,
+          job_type: jobType,
+        },
+      },
+      update: {
+        priority,
+      },
+      create: {
         submission_id: submissionId,
         job_type: jobType,
+        status: AnalysisJobStatus.pending,
+        priority,
       },
     });
-
-    const job = existingJob
-      ? await this.prisma.analysisJob.update({
-          where: {
-            id: existingJob.id,
-          },
-          data: {
-            priority,
-          },
-        })
-      : await this.prisma.analysisJob.create({
-          data: {
-            submission_id: submissionId,
-            job_type: jobType,
-            status: AnalysisJobStatus.pending,
-            priority,
-          },
-        });
 
     return serializePrisma(job);
   }
@@ -91,6 +98,18 @@ export class JobsService {
   async enqueue(id: string) {
     const job = await this.getExistingJob(id);
 
+    return runWithCorrelation(
+      {
+        submissionId: job.submission_id,
+        jobId: job.id,
+      },
+      () => this.enqueueWithContext(job),
+    );
+  }
+
+  private async enqueueWithContext(job: AnalysisJob) {
+    const id = job.id;
+
     if (job.status === AnalysisJobStatus.completed) {
       return serializePrisma(job);
     }
@@ -115,6 +134,10 @@ export class JobsService {
         },
       });
 
+      this.logger.warn('Failed to enqueue analysis job', JobsService.name, {
+        error: this.errorMessage(error),
+      });
+
       throw error;
     }
 
@@ -134,6 +157,11 @@ export class JobsService {
       jobId: queuedJob.id,
       jobType: queuedJob.job_type,
       status: queuedJob.status,
+    });
+
+    this.logger.event('job.queued', 'Analysis job queued', JobsService.name, {
+      status: queuedJob.status,
+      jobType: queuedJob.job_type,
     });
 
     return serializePrisma(queuedJob);
@@ -162,32 +190,120 @@ export class JobsService {
     return this.enqueue(id);
   }
 
-  async recoverOpenJobs() {
-    const staleRunningStartedBefore = new Date(
-      Date.now() - RECOVERY_RUNNING_TIMEOUT_MS,
+  async recoverZombieJobs() {
+    const stalePendingCreatedBefore = new Date(
+      Date.now() - getZombiePendingThresholdMs(),
     );
 
     const jobs = await this.prisma.analysisJob.findMany({
       where: {
-        OR: [
-          {
-            status: AnalysisJobStatus.pending,
-          },
-          {
-            status: AnalysisJobStatus.queued,
-          },
-          {
-            status: AnalysisJobStatus.running,
-            started_at: {
-              lt: staleRunningStartedBefore,
-            },
-          },
-        ],
+        status: AnalysisJobStatus.pending,
+        created_at: {
+          lt: stalePendingCreatedBefore,
+        },
       },
       orderBy: [{ priority: 'desc' }, { id: 'asc' }],
     });
 
-    const recoveredJobs = await this.enqueueMany(jobs);
+    return this.recoverJobs(jobs);
+  }
+
+  async recoverOpenJobs() {
+    const runningJobs = await this.prisma.analysisJob.findMany({
+      where: {
+        status: AnalysisJobStatus.running,
+        started_at: {
+          not: null,
+        },
+      },
+    });
+
+    const staleRunningJobs = runningJobs.filter(
+      (job) =>
+        job.started_at !== null &&
+        isRunningJobStale(job.job_type, job.started_at),
+    );
+
+    if (staleRunningJobs.length > 0) {
+      await this.prisma.analysisJob.updateMany({
+        where: {
+          id: {
+            in: staleRunningJobs.map((job) => job.id),
+          },
+        },
+        data: {
+          status: AnalysisJobStatus.pending,
+          started_at: null,
+          error_message: 'Recovered from stale running state',
+        },
+      });
+    }
+
+    const staleRunningJobIds = staleRunningJobs.map((job) => job.id);
+    const openJobConditions: Array<Record<string, unknown>> = [
+      {
+        status: AnalysisJobStatus.pending,
+      },
+      {
+        status: AnalysisJobStatus.queued,
+      },
+    ];
+
+    if (staleRunningJobIds.length > 0) {
+      openJobConditions.push({
+        status: AnalysisJobStatus.running,
+        id: {
+          in: staleRunningJobIds,
+        },
+      });
+    }
+
+    const jobs = await this.prisma.analysisJob.findMany({
+      where: {
+        OR: openJobConditions,
+      },
+      orderBy: [{ priority: 'desc' }, { id: 'asc' }],
+    });
+
+    return this.recoverJobs(jobs);
+  }
+
+  async listDeadLetterJobs(limit = 50): Promise<DeadLetterJobView[]> {
+    const deadLetterJobs = await this.analysisQueue.listDeadLetterJobs(limit);
+    const jobIds = deadLetterJobs.map((entry) => entry.data.jobId);
+    const dbJobs = await this.prisma.analysisJob.findMany({
+      where: {
+        id: {
+          in: jobIds,
+        },
+      },
+      select: {
+        id: true,
+        attempts: true,
+        error_message: true,
+      },
+    });
+    const dbJobsById = new Map(dbJobs.map((job) => [job.id, job]));
+
+    return deadLetterJobs.map((entry) => {
+      const dbJob = dbJobsById.get(entry.data.jobId);
+
+      return {
+        id: String(entry.id),
+        jobId: entry.data.jobId,
+        submissionId: entry.data.submissionId,
+        jobType: entry.data.jobType,
+        attempts: dbJob?.attempts ?? entry.attemptsMade,
+        failedReason:
+          entry.data.reason ?? dbJob?.error_message ?? entry.failedReason ?? '',
+        failedAt: entry.data.failedAt,
+        payload: entry.data,
+      };
+    });
+  }
+
+  private async recoverJobs(jobs: AnalysisJob[]) {
+    const recoveredJobs = await this.enqueueMany(jobs, true);
     const failed = recoveredJobs.filter(
       (job) => this.isSerializedJob(job) && job.error_message,
     ).length;
@@ -341,13 +457,17 @@ export class JobsService {
     return Boolean(result);
   }
 
-  private async enqueueMany(jobs: AnalysisJob[]) {
+  private async enqueueMany(jobs: AnalysisJob[], continueOnError = false) {
     const queuedJobs: unknown[] = [];
 
     for (const job of jobs) {
       try {
         queuedJobs.push(await this.enqueue(job.id));
-      } catch {
+      } catch (error) {
+        if (!continueOnError) {
+          throw error;
+        }
+
         queuedJobs.push(serializePrisma(await this.getExistingJob(job.id)));
       }
     }
@@ -368,23 +488,20 @@ export class JobsService {
       },
     });
 
-    const hasRunningJob = jobs.some(
-      (job) => job.status === AnalysisJobStatus.running,
-    );
-    const hasQueuedJob = jobs.some(
+    const hasPipelineActivity = jobs.some(
       (job) =>
-        job.status === AnalysisJobStatus.pending ||
         job.status === AnalysisJobStatus.queued ||
         job.status === AnalysisJobStatus.running,
     );
 
-    const nextStatus = hasRunningJob
+    const nextStatus = hasPipelineActivity
       ? SubmissionStatus.processing
-      : hasQueuedJob
-        ? SubmissionStatus.queued
+      : jobs.length > 0 &&
+          jobs.every((job) => job.status === AnalysisJobStatus.completed)
+        ? SubmissionStatus.completed
         : jobs.some((job) => job.status === AnalysisJobStatus.failed)
           ? SubmissionStatus.failed
-          : SubmissionStatus.completed;
+          : SubmissionStatus.accepted;
 
     const submission = await this.prisma.submission.update({
       where: {

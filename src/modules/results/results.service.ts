@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import {
   AnalysisResult,
   AnalysisResultType,
   Prisma,
   Severity,
 } from '@prisma/client';
+import { AppLogger } from '../../common/logging/app-logger.service';
 import { serializePrisma } from '../../common/serializers/prisma.serializer';
 import { PrismaService } from '../../infra/db/prisma.service';
 import { ElasticService } from '../../infra/elastic/elastic.service';
@@ -19,32 +20,30 @@ type CreateResultInput = {
 
 @Injectable()
 export class ResultsService {
-  private readonly logger = new Logger(ResultsService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly elastic: ElasticService,
+    private readonly logger: AppLogger,
   ) {}
 
   async create(input: CreateResultInput) {
-    const existingResult = await this.prisma.analysisResult.findFirst({
+    const result = await this.prisma.analysisResult.upsert({
       where: {
-        job_id: input.job_id,
+        job_id_result_type: {
+          job_id: input.job_id,
+          result_type: input.result_type,
+        },
       },
-    });
-
-    if (existingResult) {
-      await this.indexResult(existingResult);
-
-      return serializePrisma(existingResult);
-    }
-
-    const result = await this.prisma.analysisResult.create({
-      data: {
+      create: {
         job_id: input.job_id,
         severity: input.severity,
         score: input.score,
         result_type: input.result_type,
+        data: input.data,
+      },
+      update: {
+        severity: input.severity,
+        score: input.score,
         data: input.data,
       },
     });
@@ -54,7 +53,23 @@ export class ResultsService {
     return serializePrisma(result);
   }
 
-  async existsForJob(jobId: string) {
+  async existsForJob(jobId: string, resultType?: AnalysisResultType) {
+    if (resultType) {
+      const result = await this.prisma.analysisResult.findUnique({
+        where: {
+          job_id_result_type: {
+            job_id: jobId,
+            result_type: resultType,
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      return Boolean(result);
+    }
+
     const result = await this.prisma.analysisResult.findFirst({
       where: {
         job_id: jobId,
@@ -118,7 +133,12 @@ export class ResultsService {
       });
     } catch (error) {
       this.logger.warn(
-        `Failed to index analysis result ${result.id}: ${this.errorMessage(error)}`,
+        `Failed to index analysis result ${result.id}`,
+        ResultsService.name,
+        {
+          jobId: result.job_id,
+          error: this.errorMessage(error),
+        },
       );
     }
   }

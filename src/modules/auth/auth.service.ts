@@ -103,6 +103,7 @@ export class AuthService {
   }
 
   private toPublicUser<T extends { password_hash: string | null }>(user: T) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password_hash: _passwordHash, ...publicUser } = user;
 
     return serializePrisma(publicUser);

@@ -14,7 +14,7 @@ enum SubmissionType {
 }
 
 enum SubmissionStatus {
-  queued
+  accepted
   processing
   completed
   failed
@@ -79,11 +79,11 @@ model Submission {
   user_id       String           @db.Uuid
   user          User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
   type          SubmissionType
-  status        SubmissionStatus @default(queued)
+  status        SubmissionStatus @default(accepted)
   file_name     String?          @db.Text
   mime_type     String?          @db.Text
   size_bytes    BigInt?
-  sha256        String?          @unique @db.VarChar(64)
+  sha256        String?          @db.VarChar(64)
   storage_key   String?          @db.Text
   url           String?          @db.Text
   created_at    DateTime         @default(now()) @db.Timestamptz(3)
@@ -91,6 +91,7 @@ model Submission {
   analysis_jobs AnalysisJob[]
   iocs          Ioc[]
 
+  @@unique([type, sha256])
   @@index([user_id])
   @@index([status])
   @@index([created_at(sort: Desc)])
@@ -111,6 +112,7 @@ model AnalysisJob {
   created_at       DateTime          @default(now()) @db.Timestamptz(3)
   analysis_results AnalysisResult[]
 
+  @@unique([submission_id, job_type])
   @@index([submission_id])
   @@index([status])
   @@index([job_type])
@@ -127,6 +129,7 @@ model AnalysisResult {
   data        Json
   created_at  DateTime           @default(now()) @db.Timestamptz(3)
 
+  @@unique([job_id, result_type])
   @@index([job_id])
   @@index([data], type: Gin)
   @@map("analysis_results")
