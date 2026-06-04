@@ -2,6 +2,14 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
+// BullMQ warns about Redis eviction policy on managed Redis (Redis Cloud/Upstash)
+// which doesn't allow changing it. Suppress the noise.
+const _warn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+  if (typeof args[0] === 'string' && args[0].includes('IMPORTANT! Eviction policy')) return;
+  _warn(...args);
+};
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
@@ -17,9 +25,8 @@ async function bootstrap() {
       {
         type: 'http',
         scheme: 'bearer',
-        bearerFormat: 'base64url',
-        description:
-          'Development token — base64url({"sub":"<userId>","issued_at":"<ISO date>"})',
+        bearerFormat: 'JWT',
+        description: 'JWT access token (7d expiry)',
       },
       'access-token',
     )

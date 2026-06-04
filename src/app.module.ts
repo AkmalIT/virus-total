@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CorrelationMiddleware } from './common/logging/correlation.middleware';
 import { LoggingModule } from './common/logging/logging.module';
+import { StorageModule } from './infra/storage/storage.module';
 import { AnalysisModule } from './modules/analysis/analysis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { IocsModule } from './modules/iocs/iocs.module';
@@ -22,6 +23,7 @@ import { UsersModule } from './modules/users/users.module';
     }),
     ScheduleModule.forRoot(),
     LoggingModule,
+    StorageModule,
     AuthModule,
     UsersModule,
     SubmissionsModule,

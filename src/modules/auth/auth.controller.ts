@@ -1,5 +1,7 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
+import { GoogleAuthGuard } from '../../common/guards/google-auth.guard';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -50,5 +52,20 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Пользователь не найден' })
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto.user_id);
+  }
+
+  @Get('google')
+  @UseGuards(GoogleAuthGuard)
+  @ApiOperation({ summary: 'Redirect to Google OAuth' })
+  googleLogin() {
+    // passport redirects
+  }
+
+  @Get('google/callback')
+  @UseGuards(GoogleAuthGuard)
+  @ApiOperation({ summary: 'Google OAuth callback' })
+  async googleCallback(@Req() req: Request, @Res() res: Response) {
+    const result = await this.authService.loginWithGoogle(req.user as any);
+    res.redirect(`${process.env.FRONTEND_URL ?? 'http://localhost:3000'}/auth/callback?token=${result.access_token}`);
   }
 }

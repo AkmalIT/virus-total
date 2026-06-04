@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import {
   randomBytes,
   scrypt as scryptCallback,
@@ -18,7 +19,10 @@ const scrypt = promisify(scryptCallback);
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly jwtService: JwtService,
+  ) {}
 
   async register(dto: RegisterDto) {
     if (!dto.email || !dto.username || !dto.password) {
@@ -37,7 +41,7 @@ export class AuthService {
 
     return {
       user: this.toPublicUser(user),
-      access_token: this.issueDevelopmentToken(user.id),
+      access_token: await this.issueToken(user),
     };
   }
 
@@ -54,7 +58,7 @@ export class AuthService {
 
     return {
       user: this.toPublicUser(user),
-      access_token: this.issueDevelopmentToken(user.id),
+      access_token: await this.issueToken(user),
     };
   }
 
@@ -67,7 +71,7 @@ export class AuthService {
 
     return {
       user: this.toPublicUser(user),
-      access_token: this.issueDevelopmentToken(user.id),
+      access_token: await this.issueToken(user),
     };
   }
 
@@ -93,13 +97,35 @@ export class AuthService {
     );
   }
 
-  private issueDevelopmentToken(userId: string) {
-    return Buffer.from(
-      JSON.stringify({
-        sub: userId,
-        issued_at: new Date().toISOString(),
-      }),
-    ).toString('base64url');
+  private async issueToken(user: { id: string; email: string; role: string }) {
+    return this.jwtService.signAsync({
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    });
+  }
+
+  async loginWithGoogle(profile: {
+    oauth_subject: string;
+    oauth_provider: string;
+    email: string;
+    username: string;
+  }) {
+    let user = await this.usersService.findByEmail(profile.email);
+
+    if (!user) {
+      user = await this.usersService.create({
+        email: profile.email,
+        username: profile.username,
+        oauth_provider: profile.oauth_provider,
+        oauth_subject: profile.oauth_subject,
+      });
+    }
+
+    return {
+      user: this.toPublicUser(user),
+      access_token: await this.issueToken(user),
+    };
   }
 
   private toPublicUser<T extends { password_hash: string | null }>(user: T) {

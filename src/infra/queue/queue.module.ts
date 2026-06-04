@@ -11,11 +11,18 @@ import { ANALYSIS_DLQ, ANALYSIS_QUEUE } from './queue.constants';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         connection: configService.get<string>('REDIS_URL')
-          ? { url: configService.get<string>('REDIS_URL') }
+          ? { url: configService.get<string>('REDIS_URL'), enableOfflineQueue: false }
           : {
               host: configService.get<string>('REDIS_HOST') ?? 'localhost',
               port: Number(configService.get<string>('REDIS_PORT') ?? 6379),
+              enableOfflineQueue: false,
             },
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: 100,
+          removeOnFail: 500,
+        },
       }),
     }),
     BullModule.registerQueue({

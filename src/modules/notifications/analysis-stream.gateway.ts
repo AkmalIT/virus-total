@@ -1,4 +1,5 @@
 import {
+  ConnectedSocket,
   MessageBody,
   SubscribeMessage,
   WebSocketGateway,
@@ -19,12 +20,21 @@ export class AnalysisStreamGateway {
   server!: Server;
 
   @SubscribeMessage('analysis.subscribe')
-  async subscribe(client: Socket, @MessageBody() payload: SubscribePayload) {
-    await client.join(this.roomForSubmission(payload.submissionId));
+  async subscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: SubscribePayload,
+  ) {
+    const submissionId = payload?.submissionId;
+
+    if (!submissionId) {
+      return { event: 'analysis.error', message: 'submissionId is required' };
+    }
+
+    await client.join(this.roomForSubmission(submissionId));
 
     return {
       event: 'analysis.subscribed',
-      submissionId: payload.submissionId,
+      submissionId,
     };
   }
 
