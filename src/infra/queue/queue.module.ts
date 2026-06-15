@@ -11,11 +11,10 @@ import { ANALYSIS_DLQ, ANALYSIS_QUEUE } from './queue.constants';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         connection: configService.get<string>('REDIS_URL')
-          ? { url: configService.get<string>('REDIS_URL'), enableOfflineQueue: false }
+          ? { url: configService.get<string>('REDIS_URL') }
           : {
               host: configService.get<string>('REDIS_HOST') ?? 'localhost',
               port: Number(configService.get<string>('REDIS_PORT') ?? 6379),
-              enableOfflineQueue: false,
             },
         defaultJobOptions: {
           attempts: 3,

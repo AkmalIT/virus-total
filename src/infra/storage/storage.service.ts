@@ -1,11 +1,10 @@
 import {
   BadRequestException,
   Injectable,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomUUID } from 'node:crypto';
-import { Readable, Transform } from 'node:stream';
+import { Readable, Transform, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as Minio from 'minio';
 import { AppLogger } from '../../common/logging/app-logger.service';
@@ -43,12 +42,6 @@ export class StorageService {
   async uploadSubmissionStream(
     input: UploadSubmissionStreamInput,
   ): Promise<UploadedArtifact> {
-    if (!this.client) {
-      throw new ServiceUnavailableException(
-        'Object storage is not configured. Set MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, and MINIO_BUCKET.',
-      );
-    }
-
     const storageKey = this.buildSubmissionObjectKey(
       input.userId,
       input.fileName,
@@ -56,6 +49,7 @@ export class StorageService {
     const hash = createHash('sha256');
     let sizeBytes = 0;
 
+    // Drain stream to compute sha256 + size regardless of storage availability
     const hasher = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         hash.update(chunk);
@@ -63,6 +57,22 @@ export class StorageService {
         callback(null, chunk);
       },
     });
+
+    if (!this.client) {
+      // No MinIO configured — consume stream to get hash/size, skip actual upload
+      this.logger.warn(
+        'Object storage not configured, storing metadata only',
+        StorageService.name,
+      );
+      const sink = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+      await pipeline(input.stream, hasher, sink);
+
+      return {
+        storageKey,
+        sha256: hash.digest('hex'),
+        sizeBytes,
+      };
+    }
 
     const uploadPromise = this.client.putObject(
       this.bucketName(),

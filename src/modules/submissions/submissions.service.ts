@@ -243,7 +243,7 @@ export class SubmissionsService {
         submission,
         jobs,
       };
-    });
+    }, { timeout: 15000 });
   }
 
   private async recordEnqueueFailure(submissionId: string, reason: string) {

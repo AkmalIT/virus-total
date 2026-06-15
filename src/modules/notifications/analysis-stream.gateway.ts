@@ -7,13 +7,16 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
-type SubscribePayload = {
-  submissionId: string;
-};
+type SubscribePayload = { submissionId: string } | string;
 
 @WebSocketGateway({
   namespace: 'analysis-stream',
-  cors: true,
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+    credentials: false,
+  },
+  transports: ['websocket', 'polling'],
 })
 export class AnalysisStreamGateway {
   @WebSocketServer()
@@ -24,7 +27,9 @@ export class AnalysisStreamGateway {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: SubscribePayload,
   ) {
-    const submissionId = payload?.submissionId;
+    // frontend may send either a plain string id or { submissionId }
+    const submissionId =
+      typeof payload === 'string' ? payload : payload?.submissionId;
 
     if (!submissionId) {
       return { event: 'analysis.error', message: 'submissionId is required' };

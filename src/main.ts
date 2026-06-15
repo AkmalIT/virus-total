@@ -12,7 +12,11 @@ console.warn = (...args: unknown[]) => {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+  app.enableCors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: false,
+  });
 
   const config = new DocumentBuilder()
     .setTitle('VirusTotal API')
